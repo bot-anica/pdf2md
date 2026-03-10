@@ -27,11 +27,20 @@ pnpm dev input.pdf
 # Custom output path
 pnpm dev input.pdf -o output.md
 
+# Stream Markdown to stdout for shell pipelines
+pnpm dev input.pdf --stdout
+
+# Replace an existing output file intentionally
+pnpm dev input.pdf -o output.md --force
+
 # Insert horizontal rules between pages
 pnpm dev input.pdf --page-breaks
 
 # Force language for all code blocks
 pnpm dev input.pdf --language python
+
+# Fail fast on unexpectedly large files or documents
+pnpm dev input.pdf --max-file-size-mb 10 --max-pages 50
 ```
 
 After building, you can also run directly:
@@ -77,3 +86,10 @@ Override with `--language <lang>` to force a specific language on all code block
 - Single-column layout only (multi-column detection not supported)
 - Scanned/image-based PDFs are not supported (no OCR)
 - Language detection is heuristic-based and may not cover all languages
+
+## Safety Defaults
+
+- Rejects inputs without a `.pdf` extension unless `--allow-non-pdf` is provided
+- Refuses to overwrite the input file or an existing output file unless `--force` is provided
+- Supports `--stdout` to avoid accidental file writes in scripted workflows
+- Enforces default file-size and page-count limits, configurable with `--max-file-size-mb` and `--max-pages`

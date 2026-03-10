@@ -1,9 +1,27 @@
 import { Command } from 'commander';
 import * as fs from 'fs';
-import * as path from 'path';
-import { convertPdfToMarkdown } from './converter';
+import { DEFAULT_MAX_FILE_SIZE_BYTES } from './config';
+import {
+  megabytesToBytes,
+  parsePositiveIntegerOption,
+  parsePositiveNumberOption,
+  prepareCliPaths,
+} from './cli-support';
+import { convertPdf } from './converter';
+import { formatWarning } from './warnings';
 
 const program = new Command();
+
+interface CliOptions {
+  output?: string;
+  pageBreaks: boolean;
+  language?: string;
+  stdout: boolean;
+  force: boolean;
+  maxPages?: number;
+  maxFileSizeMb?: number;
+  allowNonPdf: boolean;
+}
 
 program
   .name('pdf-to-md')
@@ -13,31 +31,55 @@ program
   .option('-o, --output <path>', 'Output markdown file path')
   .option('--page-breaks', 'Insert horizontal rules between pages', false)
   .option('--language <lang>', 'Force language for all code blocks')
-  .action(async (input: string, options: { output?: string; pageBreaks: boolean; language?: string }) => {
-    const inputPath = path.resolve(input);
-
-    if (!fs.existsSync(inputPath)) {
-      console.error(`Error: File not found: ${inputPath}`);
-      process.exit(1);
-    }
-
-    const outputPath = options.output
-      ? path.resolve(options.output)
-      : inputPath.replace(/\.pdf$/i, '.md');
-
+  .option('--stdout', 'Write Markdown to stdout instead of a file', false)
+  .option('--force', 'Allow overwriting the input or an existing output file', false)
+  .option(
+    '--max-pages <count>',
+    'Maximum number of pages to parse before failing',
+    (value: string) => parsePositiveIntegerOption('maxPages', value)
+  )
+  .option(
+    '--max-file-size-mb <size>',
+    'Maximum input size in megabytes before failing',
+    (value: string) => parsePositiveNumberOption('maxFileSizeMb', value)
+  )
+  .option('--allow-non-pdf', 'Allow inputs without a .pdf extension', false)
+  .action(async (input: string, options: CliOptions) => {
     try {
-      const buffer = fs.readFileSync(inputPath);
-      const markdown = await convertPdfToMarkdown(buffer, {
+      const maxFileSizeBytes = megabytesToBytes(options.maxFileSizeMb) ?? DEFAULT_MAX_FILE_SIZE_BYTES;
+      const preparedPaths = prepareCliPaths(input, {
+        output: options.output,
+        stdout: options.stdout,
+        force: options.force,
+        allowNonPdf: options.allowNonPdf,
+        maxFileSizeBytes,
+      });
+      const buffer = fs.readFileSync(preparedPaths.inputPath);
+      const result = await convertPdf(buffer, {
         pageBreaks: options.pageBreaks,
         language: options.language,
+        maxPages: options.maxPages,
+        maxFileSizeBytes,
       });
 
-      fs.writeFileSync(outputPath, markdown, 'utf-8');
-      console.log(`Converted: ${inputPath} → ${outputPath}`);
+      for (const warning of result.warnings) {
+        console.error(formatWarning(warning));
+      }
+
+      if (options.stdout) {
+        process.stdout.write(result.markdown);
+        return;
+      }
+
+      fs.writeFileSync(preparedPaths.outputPath!, result.markdown, {
+        encoding: 'utf-8',
+        flag: options.force ? 'w' : 'wx',
+      });
+      console.log(`Converted: ${preparedPaths.inputPath} -> ${preparedPaths.outputPath}`);
     } catch (err) {
-      console.error('Error converting PDF:', err instanceof Error ? err.message : err);
-      process.exit(1);
+      console.error(`Error: ${err instanceof Error ? err.message : err}`);
+      process.exitCode = 1;
     }
   });
 
-program.parse();
+void program.parseAsync();

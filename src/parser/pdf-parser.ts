@@ -1,5 +1,8 @@
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { TextItem, TextMarkedContent } from 'pdfjs-dist/types/src/display/api';
+import type { ConvertConfig } from '../config';
+import { PdfLimitError } from '../errors';
+import { createWarning, type ConversionWarning } from '../warnings';
 import { RawTextItem, FontInfo } from './types';
 
 const MONOSPACE_FAMILIES = [
@@ -36,49 +39,82 @@ function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
   return 'str' in item;
 }
 
-export async function parsePdf(buffer: Buffer): Promise<RawTextItem[]> {
+export interface ParsePdfResult {
+  items: RawTextItem[];
+  pageCount: number;
+  warnings: ConversionWarning[];
+}
+
+export async function parsePdf(
+  buffer: Buffer,
+  config: Pick<ConvertConfig, 'maxPages' | 'useSystemFonts' | 'stopAtErrors' | 'isEvalSupported' | 'disableFontFace'>
+): Promise<ParsePdfResult> {
   const data = new Uint8Array(buffer);
-  const doc = await pdfjs.getDocument({ data, useSystemFonts: true }).promise;
+  const loadingTask = pdfjs.getDocument({
+    data,
+    useSystemFonts: config.useSystemFonts,
+    stopAtErrors: config.stopAtErrors,
+    isEvalSupported: config.isEvalSupported,
+    disableFontFace: config.disableFontFace,
+  });
+  const doc = await loadingTask.promise;
   const items: RawTextItem[] = [];
+  const warnings: ConversionWarning[] = [];
 
-  for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
-    const page = await doc.getPage(pageNum);
-    const textContent = await page.getTextContent();
-
-    // styles maps internal font names to { fontFamily, ascent, descent, vertical }
-    const styles = textContent.styles as Record<string, { fontFamily: string }>;
-
-    for (const item of textContent.items) {
-      if (!isTextItem(item) || !item.str) continue;
-
-      const tx = item.transform;
-      const fontSize = Math.abs(tx[3]) || Math.abs(tx[0]);
-      const x = tx[4];
-      const y = tx[5];
-
-      // Use the style's fontFamily if available, fall back to item.fontName
-      const styleFontFamily = styles[item.fontName]?.fontFamily || '';
-      const resolvedFontName = styleFontFamily || item.fontName;
-      const fontInfo = detectFontInfo(resolvedFontName);
-
-      items.push({
-        text: item.str,
-        x,
-        y,
-        fontSize: Math.round(fontSize * 100) / 100,
-        fontName: fontInfo.name,
-        fontFamily: fontInfo.family,
-        isMonospace: fontInfo.isMonospace,
-        isBold: fontInfo.isBold,
-        isItalic: fontInfo.isItalic,
-        page: pageNum,
-      });
+  try {
+    if (doc.numPages > config.maxPages) {
+      throw new PdfLimitError(
+        `PDF has ${doc.numPages} pages, which exceeds the configured limit of ${config.maxPages} pages.`
+      );
     }
-  }
 
-  if (items.length === 0) {
-    console.warn('Warning: No text content found. This may be a scanned PDF (OCR not supported).');
-  }
+    for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
+      const page = await doc.getPage(pageNum);
+      const textContent = await page.getTextContent();
 
-  return items;
+      // styles maps internal font names to { fontFamily, ascent, descent, vertical }
+      const styles = textContent.styles as Record<string, { fontFamily: string }>;
+
+      for (const item of textContent.items) {
+        if (!isTextItem(item) || !item.str) continue;
+
+        const tx = item.transform;
+        const fontSize = Math.abs(tx[3]) || Math.abs(tx[0]);
+        const x = tx[4];
+        const y = tx[5];
+
+        // Use the style's fontFamily if available, fall back to item.fontName.
+        const styleFontFamily = styles[item.fontName]?.fontFamily || '';
+        const resolvedFontName = styleFontFamily || item.fontName;
+        const fontInfo = detectFontInfo(resolvedFontName);
+
+        items.push({
+          text: item.str,
+          x,
+          y,
+          fontSize: Math.round(fontSize * 100) / 100,
+          fontName: fontInfo.name,
+          fontFamily: fontInfo.family,
+          isMonospace: fontInfo.isMonospace,
+          isBold: fontInfo.isBold,
+          isItalic: fontInfo.isItalic,
+          page: pageNum,
+        });
+      }
+    }
+
+    if (items.length === 0) {
+      warnings.push(
+        createWarning('EMPTY_TEXT', 'No text content found. This may be a scanned PDF and OCR is not supported.')
+      );
+    }
+
+    return {
+      items,
+      pageCount: doc.numPages,
+      warnings,
+    };
+  } finally {
+    await doc.destroy();
+  }
 }
