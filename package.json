@@ -1,0 +1,22 @@
+{
+  "name": "pdf-to-md",
+  "version": "1.0.0",
+  "description": "Convert PDFs to GitHub-flavored Markdown with code block detection",
+  "main": "dist/cli.js",
+  "bin": {
+    "pdf-to-md": "./bin/pdf-to-md.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "pdfjs-dist": "^4.10.38"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
